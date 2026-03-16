@@ -426,7 +426,6 @@
       <button class="tab" onclick="switchTab('deposits')">Depósitos</button>
     </div>
 
-    <!-- Tab: Usuários -->
     <div id="users-tab" class="tab-content active">
       <input type="text" class="search-bar" placeholder="Buscar por email ou ID..." id="userSearch" onkeyup="filterUsers()" />
       
@@ -452,7 +451,6 @@
       </div>
     </div>
 
-    <!-- Tab: Saques -->
     <div id="withdrawals-tab" class="tab-content">
       <div class="table-container">
         <table>
@@ -477,7 +475,6 @@
       </div>
     </div>
 
-    <!-- Tab: Depósitos -->
     <div id="deposits-tab" class="tab-content">
       <div class="table-container">
         <table>
@@ -502,7 +499,6 @@
     </div>
   </div>
 
-  <!-- Modal: Editar Saldo -->
   <div id="balanceModal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
@@ -523,7 +519,6 @@
     </div>
   </div>
 
-  <!-- Modal: Confirmar Ação -->
   <div id="confirmModal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
@@ -541,6 +536,10 @@
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js';
     import { getAuth } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
     import { getFirestore, collection, getDocs, doc, updateDoc, getDoc, query, where, orderBy, limit, Timestamp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
+
+    // === SUBSTITUA AQUI PELO SEU TOKEN ===
+    const ADMIN_TOKEN = 'SEU_TOKEN_AQUI'; // Tem que ser exatamente igual ao ADMIN_SECRET_TOKEN configurado no Netlify
+    // =====================================
 
     const firebaseConfig = {
       apiKey: "AIzaSyBo05t4KVpfwF9biqW6DdthsFJAHjrDroE",
@@ -869,23 +868,40 @@
       }
     };
 
+    // ==========================================
+    // NOVA FUNÇÃO DE APROVAR SAQUE (CHAMA O BACKEND)
+    // ==========================================
     window.approveWithdrawal = async function(userId, withdrawalId) {
-      if (!confirm('Aprovar este saque?')) return;
+      if (!confirm('Aprovar este saque? O PIX será enviado imediatamente via EvoPay.')) return;
 
       try {
-        await updateDoc(doc(db, 'users', userId, 'withdrawals', withdrawalId), {
-          status: 'completed'
+        const response = await fetch('/.netlify/functions/admin-approve-withdraw', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${ADMIN_TOKEN}` // Usa a variável declarada no topo
+          },
+          body: JSON.stringify({ userId, withdrawId: withdrawalId })
         });
 
-        alert('Saque aprovado!');
-        await loadWithdrawals();
-        await loadStats();
+        const result = await response.json();
+
+        if (response.ok) {
+          alert('✅ Saque aprovado e PIX enviado com sucesso!');
+          await loadWithdrawals();
+          await loadStats();
+        } else {
+          alert('❌ Erro ao aprovar: ' + (result.error || 'Falha desconhecida no servidor.'));
+        }
       } catch (error) {
-        console.error('Erro ao aprovar saque:', error);
-        alert('Erro: ' + error.message);
+        console.error('Erro ao conectar com API de aprovação:', error);
+        alert('Erro de conexão ao tentar aprovar o saque.');
       }
     };
 
+    // ==========================================
+    // FUNÇÃO DE REJEITAR ORIGINAL (MANTIDA INTACTA COMO PEDIDO)
+    // ==========================================
     window.rejectWithdrawal = async function(userId, withdrawalId) {
       if (!confirm('Rejeitar este saque? O saldo será devolvido ao usuário.')) return;
 
