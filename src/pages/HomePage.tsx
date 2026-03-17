@@ -55,35 +55,51 @@ export default function HomePage() {
 
   const fetchHomeStats = async (userId: string) => {
     try {
-      // 1. Busca Direta no Documento do Usuário (Evita que o Geral fique zerado)
+      setLoading(true);
+
+      // 1. Busca Saldo Atual do Usuário
       const userDocRef = doc(db, 'users', userId);
       const userSnap = await getDoc(userDocRef);
       const userData = userSnap.data();
 
-      // 2. Busca de Equipe
+      // 2. Busca Quantidade de Equipe
       const qTeam = query(collection(db, 'users'), where('referredBy', '==', userId));
       const teamSnap = await getDocs(qTeam);
       
-      // 3. Cálculo de Ganhos de Hoje via Transações
+      // 3. Definição do período de "Hoje"
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const startOfToday = Timestamp.fromDate(today);
+      const startOfTodaySeconds = Math.floor(today.getTime() / 1000);
 
+      // 4. Busca de TODAS as transações para calcular os totais
       const transactionsRef = collection(db, 'users', userId, 'transactions');
       const querySnapshot = await getDocs(transactionsRef);
 
       let todayTotal = 0;
-      // 'roulette' incluído para somar nos ganhos diários
-      const earningTypes = ['commission', 'roulette', 'investment', 'checkin', 'daily_return'];
+      let grandTotal = 0;
+      
+      // Lista de tipos de ganhos identificados nos seus arquivos .ts
+      const earningTypes = [
+        'commission',    // Comissões de equipe
+        'roulette',      // Ganhos da roleta
+        'checkin',       // Ganhos do check-in diário
+        'investment',    // Retornos de investimento
+        'daily_return'   // Lucros diários
+      ];
 
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        const amount = Number(data.amount || 0);
+        const amount = Number(data.amount || 0); // Campo usado para valor nos seus hooks
         const type = data.type;
-        const createdAt = data.createdAt;
+        const createdAt = data.createdAt as Timestamp;
 
+        // Se a transação for um dos tipos de ganho
         if (earningTypes.includes(type) && amount > 0) {
-          if (createdAt && createdAt.seconds >= startOfToday.seconds) {
+          // Soma ao Total Geral (Desde o primeiro dia)
+          grandTotal += amount;
+
+          // Se for de hoje, soma ao Total de Hoje
+          if (createdAt && createdAt.seconds >= startOfTodaySeconds) {
             todayTotal += amount;
           }
         }
@@ -92,8 +108,8 @@ export default function HomePage() {
       setStats({
         todayEarnings: todayTotal,
         totalInvites: teamSnap.size,
-        allTimeEarnings: Number(userData?.totalEarned || 0), // Pega o valor real (Ex: 6059) do banco
-        currentBalance: Number(userData?.balance || 0)     // Saldo atualizado direto do banco
+        allTimeEarnings: grandTotal, // Agora calculado somando cada transação do histórico
+        currentBalance: Number(userData?.balance || 0)
       });
     } catch (err) {
       console.error("Erro ao buscar estatísticas:", err);
@@ -170,7 +186,7 @@ export default function HomePage() {
       </Card>
 
       <Roulette onSpinComplete={() => {
-        // Delay de 1.5s para garantir que a transação foi registrada antes do refresh
+        // Delay para garantir que o Firestore processou a transação
         setTimeout(() => fetchHomeStats(user.id), 1500);
       }} />
     </div>
