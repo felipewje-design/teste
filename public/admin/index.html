@@ -200,6 +200,11 @@
         <input type="password" id="password" placeholder="Sua senha segura" required />
       </div>
 
+      <div class="form-group">
+        <label for="adminToken">Token de Segurança PIX</label>
+        <input type="password" id="adminToken" placeholder="Insira o token para aprovar saques" required />
+      </div>
+
       <button type="submit" id="loginBtn">
         <span id="buttonText">ENTRAR NO PAINEL</span>
         <span id="loading" class="loading">
@@ -230,6 +235,8 @@
     const form = document.getElementById('loginForm');
     const emailInput = document.getElementById('email');
     const passwordInput = document.getElementById('password');
+    // Pegando o elemento do novo campo
+    const tokenInput = document.getElementById('adminToken');
     const loginBtn = document.getElementById('loginBtn');
     const errorDiv = document.getElementById('error');
     const buttonText = document.getElementById('buttonText');
@@ -251,6 +258,7 @@
       try {
         const email = emailInput.value.trim();
         const password = passwordInput.value;
+        const adminTokenValue = tokenInput.value.trim(); // Pega o valor do token digitado
 
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
@@ -261,10 +269,14 @@
           throw new Error('Acesso negado. Você não é um administrador.');
         }
 
+        // Salva a autenticação do Firebase
         localStorage.setItem('adminAuth', JSON.stringify({ 
           email: user.email, 
           uid: user.uid 
         }));
+        
+        // Salva o Token do Netlify APENAS para esta sessão (é apagado ao fechar a aba)
+        sessionStorage.setItem('adminToken', adminTokenValue);
         
         window.location.href = 'dashboard.html';
       } catch (error) {
