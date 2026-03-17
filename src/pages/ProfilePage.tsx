@@ -9,23 +9,111 @@ import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { 
   Wallet, ArrowUpCircle, ArrowDownCircle, History, Copy, CheckCircle, 
-  AlertCircle, Hash, Clock, MessageCircle
+  AlertCircle, Hash, Clock, MessageCircle, Trophy
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { getFirestore, collection, query, where, getDocs, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+
+// Configuração dos 5 Níveis de Bônus (Plano de Carreira)
+const BONUS_TIERS = [
+  { id: 'lvl1', goal: 200, reward: 30, label: 'Líder Bronze' },
+  { id: 'lvl2', goal: 500, reward: 70, label: 'Líder Prata' },
+  { id: 'lvl3', goal: 1000, reward: 150, label: 'Líder Ouro' },
+  { id: 'lvl4', goal: 2500, reward: 400, label: 'Líder Esmeralda' },
+  { id: 'lvl5', goal: 5000, reward: 800, label: 'Líder Diamante' }
+];
 
 export default function ProfilePage() {
   const { user } = useAuth();
   const { transactions } = useTransactions();
-  // CORREÇÃO 1: Adicionado o qrImage aqui
   const { loading: depositLoading, pixCode, qrImage, initiateDeposit, resetDeposit } = useDeposit();
   const { loading: withdrawLoading, canWithdrawNow, initiateWithdraw } = useWithdraw();
 
-  const [activeSection, setActiveSection] = useState<'main' | 'deposit' | 'withdraw'>('main');
+  // Estados
+  const [activeSection, setActiveSection] = useState<'main' | 'deposit' | 'withdraw' | 'team-bonus'>('main');
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [pixKey, setPixKey] = useState('');
   const [pixType, setPixType] = useState<'email' | 'cpf' | 'phone'>('cpf');
   const [copied, setCopied] = useState(false);
+
+  // Estados do Plano de Carreira
+  const [teamTotal, setTeamTotal] = useState(0);
+  const [isFetchingTeam, setIsFetchingTeam] = useState(false);
+  const [claiming, setClaiming] = useState<string | null>(null);
+
+  // Efeito para carregar os dados da equipe quando abrir a aba de bônus
+  useEffect(() => {
+    if (activeSection === 'team-bonus') {
+      fetchTeamData();
+    }
+  }, [activeSection]);
+
+  const fetchTeamData = async () => {
+    if (!user?.id) return;
+    setIsFetchingTeam(true);
+    try {
+      const db = getFirestore();
+      // NOTA: Se o seu banco salva o ID de quem convidou em um campo com outro nome (ex: inviteCode), altere "referredBy" abaixo.
+      const teamQuery = query(collection(db, 'users'), where('referredBy', '==', user.id));
+      const teamSnapshot = await getDocs(teamQuery);
+      
+      let total = 0;
+      for (const memberDoc of teamSnapshot.docs) {
+        // Busca os depósitos apenas com status 'completed' daquele membro
+        const depositsQuery = collection(db, 'users', memberDoc.id, 'deposits');
+        const depositsSnap = await getDocs(depositsQuery);
+        depositsSnap.forEach(dep => {
+          const data = dep.data();
+          if (data.status === 'completed') {
+            total += Number(data.amount) || 0;
+          }
+        });
+      }
+      setTeamTotal(total);
+    } catch (error) {
+      console.error("Erro ao buscar dados da equipe:", error);
+      toast.error("Erro ao carregar seu plano de carreira");
+    } finally {
+      setIsFetchingTeam(false);
+    }
+  };
+
+  const handleClaimBonus = async (tierId: string, amount: number) => {
+    if (!user?.id) return;
+    setClaiming(tierId);
+    try {
+      const db = getFirestore();
+      const userRef = doc(db, 'users', user.id);
+      const userSnap = await getDoc(userRef);
+      
+      if (userSnap.exists()) {
+        const userData = userSnap.data();
+        const currentBonuses = userData.collectedBonuses || [];
+        
+        if (currentBonuses.includes(tierId)) {
+          toast.error("Você já coletou este bônus!");
+          return;
+        }
+
+        const newBalance = (Number(userData.balance) || 0) + amount;
+        
+        await updateDoc(userRef, {
+          balance: newBalance,
+          collectedBonuses: arrayUnion(tierId)
+        });
+
+        toast.success(`🎉 Parabéns! Bônus de R$ ${amount.toFixed(2)} resgatado com sucesso!`);
+        // Atualiza os dados localmente (recarregando para garantir sincronia do saldo na UI)
+        window.location.reload(); 
+      }
+    } catch (error) {
+      console.error("Erro ao resgatar:", error);
+      toast.error("Erro ao processar o bônus.");
+    } finally {
+      setClaiming(null);
+    }
+  };
 
   const handleDeposit = async () => {
     const amount = Number(depositAmount);
@@ -157,6 +245,25 @@ export default function ProfilePage() {
               Suporte
             </a>
           </div>
+
+          {/* NOVO BOTÃO DE PLANO DE CARREIRA */}
+          <Card 
+            className="bg-gradient-to-br from-[#1a1a1a] to-[#0a0a0a] border-[#22c55e]/20 cursor-pointer hover:border-[#22c55e]/50 transition-all mt-4"
+            onClick={() => setActiveSection('team-bonus')}
+          >
+            <CardContent className="p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="bg-[#22c55e]/10 p-2 rounded-lg">
+                  <Trophy className="w-5 h-5 text-[#22c55e]" />
+                </div>
+                <div>
+                  <p className="text-white font-bold text-sm">Plano de Carreira</p>
+                  <p className="text-gray-400 text-xs">Ganhe até R$ 800 em bônus</p>
+                </div>
+              </div>
+              <span className="text-gray-500">→</span>
+            </CardContent>
+          </Card>
         </CardContent>
       </Card>
 
@@ -207,7 +314,100 @@ export default function ProfilePage() {
     </div>
   );
 
+  // ABA DO PLANO DE CARREIRA
+  const renderTeamBonus = () => {
+    const collected = user?.collectedBonuses || [];
+    const maxGoal = BONUS_TIERS[BONUS_TIERS.length - 1].goal;
+    const progress = Math.min((teamTotal / maxGoal) * 100, 100);
+
+    return (
+      <div className="space-y-6 animate-fade-in">
+        <button
+          onClick={() => setActiveSection('main')}
+          className="text-gray-400 hover:text-white transition-colors"
+        >
+          ← Voltar
+        </button>
+
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto bg-[#22c55e]/10 rounded-full flex items-center justify-center mb-3">
+            <Trophy className="w-8 h-8 text-[#22c55e]" />
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Plano de Carreira</h2>
+          <p className="text-gray-400 text-sm">Aumente o investimento da sua equipe e suba de nível para desbloquear recompensas diretas no seu saldo.</p>
+        </div>
+
+        <Card className="bg-[#111111]/80 backdrop-blur-sm border-[#1a1a1a]">
+          <CardContent className="pt-6">
+            <p className="text-gray-400 text-xs mb-1 text-center">Investimento Total da Equipe</p>
+            <p className="text-3xl font-bold text-[#22c55e] text-center mb-4">
+              {isFetchingTeam ? '...' : `R$ ${teamTotal.toFixed(2)}`}
+            </p>
+            <div className="w-full h-3 bg-[#1a1a1a] rounded-full overflow-hidden border border-[#22c55e]/10">
+              <div 
+                className="h-full bg-gradient-to-r from-[#22c55e] to-[#16a34a] transition-all duration-1000" 
+                style={{ width: `${progress}%` }} 
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="space-y-3">
+          {BONUS_TIERS.map((tier) => {
+            const isCollected = collected.includes(tier.id);
+            const canClaim = teamTotal >= tier.goal && !isCollected;
+            const isProcessing = claiming === tier.id;
+            const progressToTier = Math.min((teamTotal / tier.goal) * 100, 100);
+
+            return (
+              <Card key={tier.id} className={`bg-[#111111]/80 backdrop-blur-sm border ${canClaim ? 'border-[#22c55e]/50 shadow-lg shadow-[#22c55e]/10' : 'border-[#1a1a1a]'} transition-all`}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className={`font-bold text-lg ${canClaim || isCollected ? 'text-[#22c55e]' : 'text-white'}`}>
+                        {tier.label}
+                      </p>
+                      <p className="text-xs text-gray-500">Meta: R$ {tier.goal.toFixed(2)}</p>
+                    </div>
+                    
+                    {isCollected ? (
+                      <div className="bg-[#1a1a1a] border border-[#22c55e]/20 text-[#22c55e]/50 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4" /> Coletado
+                      </div>
+                    ) : canClaim ? (
+                      <Button 
+                        onClick={() => handleClaimBonus(tier.id, tier.reward)}
+                        disabled={isProcessing}
+                        className="bg-gradient-to-r from-[#22c55e] to-[#16a34a] hover:from-[#16a34a] hover:to-[#22c55e] text-white font-bold shadow-lg shadow-[#22c55e]/20"
+                      >
+                        {isProcessing ? 'Resgatando...' : `RESGATAR R$ ${tier.reward}`}
+                      </Button>
+                    ) : (
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500 font-mono mb-1">Falta R$ {(tier.goal - teamTotal).toFixed(0)}</p>
+                        <div className="bg-[#1a1a1a] px-3 py-1 rounded-md text-gray-400 text-xs font-semibold">
+                          Prêmio: R$ {tier.reward}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {!isCollected && !canClaim && (
+                     <div className="w-full h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden mt-2">
+                       <div className="h-full bg-[#22c55e]/50" style={{ width: `${progressToTier}%` }} />
+                     </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderDeposit = () => (
+    //... (Todo o seu código original do renderDeposit se mantém intacto)
     <div className="space-y-6 animate-slide-up">
       <button
         onClick={() => {
@@ -285,7 +485,6 @@ export default function ProfilePage() {
               <p className="text-4xl font-bold text-[#22c55e]">R$ {Number(depositAmount).toFixed(2)}</p>
             </div>
 
-            {/* CORREÇÃO 2: Bloco do QR Code inserido aqui */}
             {qrImage && (
               <div className="flex justify-center mb-6">
                 <div className="bg-white p-3 rounded-xl inline-block">
@@ -345,6 +544,7 @@ export default function ProfilePage() {
   );
 
   const renderWithdraw = () => {
+    //... (Todo o seu código original do renderWithdraw se mantém intacto)
     const withdrawCheck = canWithdrawNow();
     const amount = Number(withdrawAmount) || 0;
     const fee = amount * 0.10;
@@ -466,6 +666,7 @@ export default function ProfilePage() {
       {activeSection === 'main' && renderMain()}
       {activeSection === 'deposit' && renderDeposit()}
       {activeSection === 'withdraw' && renderWithdraw()}
+      {activeSection === 'team-bonus' && renderTeamBonus()}
     </div>
   );
 }
