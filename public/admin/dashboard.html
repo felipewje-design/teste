@@ -537,10 +537,6 @@
     import { getAuth } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js';
     import { getFirestore, collection, getDocs, doc, updateDoc, getDoc, query, where, orderBy, limit, Timestamp } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
 
-    // === SUBSTITUA AQUI PELO SEU TOKEN ===
-    const ADMIN_TOKEN = 'm0n3ty_53cur3_4dm1n_2026_xYz'; // Tem que ser exatamente igual ao ADMIN_SECRET_TOKEN configurado no Netlify
-    // =====================================
-
     const firebaseConfig = {
       apiKey: "AIzaSyBo05t4KVpfwF9biqW6DdthsFJAHjrDroE",
       authDomain: "monety-site-2.firebaseapp.com",
@@ -869,17 +865,34 @@
     };
 
     // ==========================================
-    // NOVA FUNÇÃO DE APROVAR SAQUE (CHAMA O BACKEND)
+    // NOVA FUNÇÃO DE APROVAR SAQUE COM SEGURANÇA NA SESSÃO
     // ==========================================
     window.approveWithdrawal = async function(userId, withdrawalId) {
       if (!confirm('Aprovar este saque? O PIX será enviado imediatamente via EvoPay.')) return;
+
+      // Busca o token salvo na sessão atual
+      let adminToken = sessionStorage.getItem('adminToken');
+      
+      // Se não tiver o token na memória, pede ao administrador
+      if (!adminToken) {
+        adminToken = prompt('🔒 Por segurança, digite o Token de Admin para autorizar pagamentos:');
+        
+        // Se o usuário clicar em "Cancelar" ou deixar vazio
+        if (!adminToken) {
+          alert('Operação cancelada. Token é obrigatório para aprovar saques.');
+          return;
+        }
+        
+        // Salva na sessão para não pedir novamente enquanto a aba estiver aberta
+        sessionStorage.setItem('adminToken', adminToken);
+      }
 
       try {
         const response = await fetch('/.netlify/functions/admin-approve-withdraw', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${ADMIN_TOKEN}` // Usa a variável declarada no topo
+            'Authorization': `Bearer ${adminToken}`
           },
           body: JSON.stringify({ userId, withdrawId: withdrawalId })
         });
@@ -891,7 +904,13 @@
           await loadWithdrawals();
           await loadStats();
         } else {
-          alert('❌ Erro ao aprovar: ' + (result.error || 'Falha desconhecida no servidor.'));
+          // Se deu erro de autorização, limpa o token salvo para o admin digitar novamente na próxima
+          if (response.status === 401) {
+            sessionStorage.removeItem('adminToken');
+            alert('❌ Erro: Token de Admin inválido. Ele foi removido da sessão. Tente aprovar novamente.');
+          } else {
+            alert('❌ Erro ao aprovar: ' + (result.error || 'Falha desconhecida no servidor.'));
+          }
         }
       } catch (error) {
         console.error('Erro ao conectar com API de aprovação:', error);
@@ -900,7 +919,7 @@
     };
 
     // ==========================================
-    // FUNÇÃO DE REJEITAR ORIGINAL (MANTIDA INTACTA COMO PEDIDO)
+    // FUNÇÃO DE REJEITAR ORIGINAL (MANTIDA INTACTA)
     // ==========================================
     window.rejectWithdrawal = async function(userId, withdrawalId) {
       if (!confirm('Rejeitar este saque? O saldo será devolvido ao usuário.')) return;
@@ -931,6 +950,7 @@
 
     window.logout = function() {
       localStorage.removeItem('adminAuth');
+      sessionStorage.removeItem('adminToken'); // Limpa a senha do PIX ao sair
       window.location.href = 'index.html';
     };
 
