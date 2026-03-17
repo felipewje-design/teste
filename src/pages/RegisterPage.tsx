@@ -3,6 +3,9 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Eye, EyeOff, Mail, Lock, Users, AlertCircle, CheckCircle, User } from 'lucide-react';
 import { toast } from 'sonner';
+// Importações extras para adicionar os bônus ao banco na hora de criar a conta
+import { getAuth } from 'firebase/auth';
+import { getFirestore, doc, updateDoc } from 'firebase/firestore';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -54,9 +57,22 @@ export default function RegisterPage() {
     setIsLoading(true);
 
     try {
-      // Passamos o inviteCode para a função de registro
-      // A lógica de busca do referido será feita dentro do AuthContext
       await register(email, password, name, inviteCode || undefined);
+      
+      // INÍCIO DA ATUALIZAÇÃO: Garante que o novo usuário tenha a carteira de bônus inicializada
+      try {
+        const auth = getAuth();
+        const user = auth.currentUser;
+        if (user) {
+          const db = getFirestore();
+          await updateDoc(doc(db, 'users', user.uid), {
+            collectedBonuses: []
+          });
+        }
+      } catch (dbError) {
+        console.log("Aviso: Falha silenciada ao inicializar carteira de bônus.", dbError);
+      }
+      // FIM DA ATUALIZAÇÃO
       
       toast.success('🎉 Conta criada!', {
         description: 'Parabéns! Seu cadastro foi realizado com sucesso',
@@ -67,7 +83,7 @@ export default function RegisterPage() {
       localStorage.removeItem("inviteCode");
 
       setTimeout(() => {
-        navigate('/home'); // Redireciona para home após o registro
+        navigate('/home'); 
       }, 2000);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Erro ao criar conta';
