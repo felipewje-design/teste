@@ -49,30 +49,37 @@ export default function ProfilePage() {
     }
   }, [activeSection]);
 
+ // ... (mantenha os imports e BONUS_TIERS como estão)
+
   const fetchTeamData = async () => {
     if (!user?.id) return;
     setIsFetchingTeam(true);
     try {
       const db = getFirestore();
-      // NOTA: Se o seu banco salva o ID de quem convidou em um campo com outro nome (ex: inviteCode), altere "referredBy" abaixo.
-      const teamQuery = query(collection(db, 'users'), where('referredBy', '==', user.id));
+      
+      // 1. Consulta todos os usuários que foram convidados por você
+      // Importante: No seu print do Firestore, o campo é 'invitedBy'
+      const teamQuery = query(
+        collection(db, 'users'), 
+        where('invitedBy', '==', user.id)
+      );
+      
       const teamSnapshot = await getDocs(teamQuery);
       
       let total = 0;
-      for (const memberDoc of teamSnapshot.docs) {
-        // Busca os depósitos apenas com status 'completed' daquele membro
-        const depositsQuery = collection(db, 'users', memberDoc.id, 'deposits');
-        const depositsSnap = await getDocs(depositsQuery);
-        depositsSnap.forEach(dep => {
-          const data = dep.data();
-          if (data.status === 'completed') {
-            total += Number(data.amount) || 0;
-          }
-        });
-      }
+      
+      // 2. Itera sobre os membros da equipe e soma o campo 'totalDeposited'
+      // Isso é muito mais rápido do que buscar subcoleções de cada um
+      teamSnapshot.forEach((memberDoc) => {
+        const data = memberDoc.data();
+        // Soma o valor total depositado que já existe no documento do usuário
+        total += Number(data.totalDeposited) || 0;
+      });
+
       setTeamTotal(total);
+      console.log("Investimento Total da Equipe Calculado:", total);
     } catch (error) {
-      console.error("Erro ao buscar dados da equipe:", error);
+      console.error("Erro detalhado ao buscar equipe:", error);
       toast.error("Erro ao carregar seu plano de carreira");
     } finally {
       setIsFetchingTeam(false);
@@ -85,31 +92,35 @@ export default function ProfilePage() {
     try {
       const db = getFirestore();
       const userRef = doc(db, 'users', user.id);
-      const userSnap = await getDoc(userRef);
       
-      if (userSnap.exists()) {
-        const userData = userSnap.data();
-        const currentBonuses = userData.collectedBonuses || [];
-        
-        if (currentBonuses.includes(tierId)) {
-          toast.error("Você já coletou este bônus!");
-          return;
-        }
+      // Verificação de segurança: não confiar apenas no estado local
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) return;
 
-        const newBalance = (Number(userData.balance) || 0) + amount;
-        
-        await updateDoc(userRef, {
-          balance: newBalance,
-          collectedBonuses: arrayUnion(tierId)
-        });
+      const userData = userSnap.data();
+      const collectedBonuses = userData.collectedBonuses || [];
 
-        toast.success(`🎉 Parabéns! Bônus de R$ ${amount.toFixed(2)} resgatado com sucesso!`);
-        // Atualiza os dados localmente (recarregando para garantir sincronia do saldo na UI)
-        window.location.reload(); 
+      if (collectedBonuses.includes(tierId)) {
+        toast.error("Você já coletou este bônus!");
+        return;
       }
+
+      // Adiciona o bônus ao saldo e registra a coleta
+      const newBalance = (Number(userData.balance) || 0) + amount;
+      
+      await updateDoc(userRef, {
+        balance: newBalance,
+        collectedBonuses: arrayUnion(tierId)
+      });
+
+      toast.success(`🎉 Bônus de R$ ${amount.toFixed(2)} adicionado ao seu saldo!`);
+      
+      // Atualiza o total localmente para evitar recarregar a página inteira
+      setTimeout(() => window.location.reload(), 1500);
+      
     } catch (error) {
-      console.error("Erro ao resgatar:", error);
-      toast.error("Erro ao processar o bônus.");
+      console.error("Erro ao resgatar bônus:", error);
+      toast.error("Falha ao processar resgate.");
     } finally {
       setClaiming(null);
     }
