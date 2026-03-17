@@ -49,37 +49,30 @@ export default function ProfilePage() {
     }
   }, [activeSection]);
 
- // ... (mantenha os imports e BONUS_TIERS como estão)
-
   const fetchTeamData = async () => {
     if (!user?.id) return;
     setIsFetchingTeam(true);
     try {
       const db = getFirestore();
       
-      // 1. Consulta todos os usuários que foram convidados por você
-      // Importante: No seu print do Firestore, o campo é 'invitedBy'
+      // Busca a equipe usando o campo correto (referredBy)
       const teamQuery = query(
         collection(db, 'users'), 
-        where('invitedBy', '==', user.id)
+        where('referredBy', '==', user.id)
       );
-      
       const teamSnapshot = await getDocs(teamQuery);
       
       let total = 0;
       
-      // 2. Itera sobre os membros da equipe e soma o campo 'totalDeposited'
-      // Isso é muito mais rápido do que buscar subcoleções de cada um
+      // Soma o totalDeposited diretamente de cada membro da equipe
       teamSnapshot.forEach((memberDoc) => {
         const data = memberDoc.data();
-        // Soma o valor total depositado que já existe no documento do usuário
         total += Number(data.totalDeposited) || 0;
       });
 
       setTeamTotal(total);
-      console.log("Investimento Total da Equipe Calculado:", total);
     } catch (error) {
-      console.error("Erro detalhado ao buscar equipe:", error);
+      console.error("Erro ao buscar dados da equipe:", error);
       toast.error("Erro ao carregar seu plano de carreira");
     } finally {
       setIsFetchingTeam(false);
@@ -92,35 +85,31 @@ export default function ProfilePage() {
     try {
       const db = getFirestore();
       const userRef = doc(db, 'users', user.id);
-      
-      // Verificação de segurança: não confiar apenas no estado local
       const userSnap = await getDoc(userRef);
-      if (!userSnap.exists()) return;
+      
+      if (userSnap.exists()) {
+        const userData = userSnap.data();
+        const currentBonuses = userData.collectedBonuses || [];
+        
+        if (currentBonuses.includes(tierId)) {
+          toast.error("Você já coletou este bônus!");
+          return;
+        }
 
-      const userData = userSnap.data();
-      const collectedBonuses = userData.collectedBonuses || [];
+        const newBalance = (Number(userData.balance) || 0) + amount;
+        
+        await updateDoc(userRef, {
+          balance: newBalance,
+          collectedBonuses: arrayUnion(tierId)
+        });
 
-      if (collectedBonuses.includes(tierId)) {
-        toast.error("Você já coletou este bônus!");
-        return;
+        toast.success(`🎉 Parabéns! Bônus de R$ ${amount.toFixed(2)} resgatado com sucesso!`);
+        // Atualiza a página para garantir sincronia do saldo
+        setTimeout(() => window.location.reload(), 1500); 
       }
-
-      // Adiciona o bônus ao saldo e registra a coleta
-      const newBalance = (Number(userData.balance) || 0) + amount;
-      
-      await updateDoc(userRef, {
-        balance: newBalance,
-        collectedBonuses: arrayUnion(tierId)
-      });
-
-      toast.success(`🎉 Bônus de R$ ${amount.toFixed(2)} adicionado ao seu saldo!`);
-      
-      // Atualiza o total localmente para evitar recarregar a página inteira
-      setTimeout(() => window.location.reload(), 1500);
-      
     } catch (error) {
-      console.error("Erro ao resgatar bônus:", error);
-      toast.error("Falha ao processar resgate.");
+      console.error("Erro ao resgatar:", error);
+      toast.error("Erro ao processar o bônus.");
     } finally {
       setClaiming(null);
     }
@@ -257,7 +246,7 @@ export default function ProfilePage() {
             </a>
           </div>
 
-          {/* NOVO BOTÃO DE PLANO DE CARREIRA */}
+          {/* BOTÃO DE PLANO DE CARREIRA */}
           <Card 
             className="bg-gradient-to-br from-[#1a1a1a] to-[#0a0a0a] border-[#22c55e]/20 cursor-pointer hover:border-[#22c55e]/50 transition-all mt-4"
             onClick={() => setActiveSection('team-bonus')}
@@ -418,7 +407,6 @@ export default function ProfilePage() {
   };
 
   const renderDeposit = () => (
-    //... (Todo o seu código original do renderDeposit se mantém intacto)
     <div className="space-y-6 animate-slide-up">
       <button
         onClick={() => {
@@ -555,7 +543,6 @@ export default function ProfilePage() {
   );
 
   const renderWithdraw = () => {
-    //... (Todo o seu código original do renderWithdraw se mantém intacto)
     const withdrawCheck = canWithdrawNow();
     const amount = Number(withdrawAmount) || 0;
     const fee = amount * 0.10;
