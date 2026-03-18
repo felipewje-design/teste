@@ -6,7 +6,7 @@ import Roulette from '../components/Roulette';
 import { TrendingUp, Users, Wallet, Loader2 } from 'lucide-react';
 
 import { db } from "../firebase/firebase"; 
-import { collection, query, where, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, doc, onSnapshot } from 'firebase/firestore';
 
 // Componente para a animação de contagem fluida
 const AnimatedNumber = ({ value }: { value: number }) => {
@@ -53,69 +53,74 @@ export default function HomePage() {
   });
   const [loading, setLoading] = useState(true);
 
-  const fetchHomeStats = async (userId: string) => {
-    try {
-      // 1. Busca dados do usuário para Saldo e Convites
-      const userDocRef = doc(db, 'users', userId);
-      const userSnap = await getDoc(userDocRef);
-      const userData = userSnap.data();
+  useEffect(() => {
+    if (!user?.id) return;
 
-      // 2. Busca Equipe (Contagem Real)
-      const qTeam = query(collection(db, 'users'), where('referredBy', '==', userId));
-      const teamSnap = await getDocs(qTeam);
+    // 1. ESCUTADOR DO SALDO (Atualiza na hora que ganha)
+    const userRef = doc(db, 'users', user.id);
+    const unsubUser = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setStats(prev => ({ ...prev, currentBalance: Number(docSnap.data().balance || 0) }));
+      }
+    });
+
+    // 2. ESCUTADOR DA EQUIPE
+    const qTeam = query(collection(db, 'users'), where('referredBy', '==', user.id));
+    const unsubTeam = onSnapshot(qTeam, (snapshot) => {
+      setStats(prev => ({ ...prev, totalInvites: snapshot.size }));
+    });
+
+    // 3. ESCUTADOR DAS TRANSAÇÕES (Soma tudo em tempo real)
+    const transactionsRef = collection(db, 'users', user.id, 'transactions');
+    const unsubTransactions = onSnapshot(transactionsRef, (snapshot) => {
+      let todayTotal = 0;
+      let grandTotal = 0;
       
-      // 3. Preparação para somar transações
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const startOfTodaySeconds = Math.floor(today.getTime() / 1000);
 
-      const transactionsRef = collection(db, 'users', userId, 'transactions');
-      const querySnapshot = await getDocs(transactionsRef);
-
-      let todayTotal = 0;
-      let grandTotal = 0;
-      
-      // Tipos que NÃO devem contar como "Ganho" (Apenas depósitos)
+      // Ignora apenas os depósitos na hora de somar os lucros
       const excludeTypes = ['deposit', 'pix_deposit', 'manual_deposit']; 
 
-      querySnapshot.forEach((doc) => {
+      snapshot.forEach((doc) => {
         const data = doc.data();
         const amount = Number(data.amount || 0);
         const type = data.type?.toLowerCase() || '';
-        const createdAt = data.createdAt as Timestamp;
-
-        // LÓGICA: Se o valor for positivo e não for um depósito, é um ganho (roleta, comissão, checkin, etc)
+        
         if (amount > 0 && !excludeTypes.includes(type)) {
-          // Soma ao Total Geral (Desde sempre)
           grandTotal += amount;
-
-          // Soma ao Ganho de Hoje se a data for de hoje
-          if (createdAt && createdAt.seconds >= startOfTodaySeconds) {
+          
+          // Correção do Bug: Se createdAt for null (pendente de envio para o Firebase), 
+          // ou se a data for de hoje, ele soma no ganho diário.
+          const isToday = !data.createdAt || data.createdAt.seconds >= startOfTodaySeconds;
+          
+          if (isToday) {
             todayTotal += amount;
           }
         }
       });
 
-      setStats({
+      setStats(prev => ({
+        ...prev,
         todayEarnings: todayTotal,
-        totalInvites: teamSnap.size,
-        allTimeEarnings: grandTotal,
-        currentBalance: Number(userData?.balance || 0)
-      });
-    } catch (err) {
-      console.error("Erro ao buscar estatísticas:", err);
-    } finally {
+        allTimeEarnings: grandTotal
+      }));
+      
       setLoading(false);
-    }
-  };
+    });
 
-  useEffect(() => {
-    if (user?.id) {
-      fetchHomeStats(user.id);
-    }
+    // Limpa os escutadores quando o usuário sai da tela
+    return () => {
+      unsubUser();
+      unsubTeam();
+      unsubTransactions();
+    };
   }, [user?.id]);
 
-  if (!user) return <div className="h-screen bg-black flex items-center justify-center"><Loader2 className="animate-spin text-[#22c55e]"/></div>;
+  if (!user || loading) {
+    return <div className="h-screen bg-black flex items-center justify-center"><Loader2 className="animate-spin text-[#22c55e]"/></div>;
+  }
 
   return (
     <div className="space-y-6 pb-6 animate-fade-in">
@@ -172,14 +177,12 @@ export default function HomePage() {
 
       <Card className="bg-[#111111]/80 border-[#1a1a1a]">
         <CardContent className="pt-6">
-          <CheckIn onCheckInComplete={() => fetchHomeStats(user.id)} />
+          {/* O tempo real já resolve tudo, não precisamos forçar a atualização aqui */}
+          <CheckIn onCheckInComplete={() => {}} />
         </CardContent>
       </Card>
 
-      <Roulette onSpinComplete={() => {
-        // Aumentado para 2.5s para garantir que o Firebase indexou a transação da roleta
-        setTimeout(() => fetchHomeStats(user.id), 2500);
-      }} />
+      <Roulette onSpinComplete={() => {}} />
     </div>
   );
 }
