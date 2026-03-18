@@ -55,50 +55,41 @@ export default function HomePage() {
 
   const fetchHomeStats = async (userId: string) => {
     try {
-      setLoading(true);
-
-      // 1. Busca Saldo Atual do Usuário
+      // 1. Busca dados do usuário para Saldo e Convites
       const userDocRef = doc(db, 'users', userId);
       const userSnap = await getDoc(userDocRef);
       const userData = userSnap.data();
 
-      // 2. Busca Quantidade de Equipe
+      // 2. Busca Equipe (Contagem Real)
       const qTeam = query(collection(db, 'users'), where('referredBy', '==', userId));
       const teamSnap = await getDocs(qTeam);
       
-      // 3. Definição do período de "Hoje"
+      // 3. Preparação para somar transações
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const startOfTodaySeconds = Math.floor(today.getTime() / 1000);
 
-      // 4. Busca de TODAS as transações para calcular os totais
       const transactionsRef = collection(db, 'users', userId, 'transactions');
       const querySnapshot = await getDocs(transactionsRef);
 
       let todayTotal = 0;
       let grandTotal = 0;
       
-      // Lista de tipos de ganhos identificados nos seus arquivos .ts
-      const earningTypes = [
-        'commission',    // Comissões de equipe
-        'roulette',      // Ganhos da roleta
-        'checkin',       // Ganhos do check-in diário
-        'investment',    // Retornos de investimento
-        'daily_return'   // Lucros diários
-      ];
+      // Tipos que NÃO devem contar como "Ganho" (Apenas depósitos)
+      const excludeTypes = ['deposit', 'pix_deposit', 'manual_deposit']; 
 
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        const amount = Number(data.amount || 0); // Campo usado para valor nos seus hooks
-        const type = data.type;
+        const amount = Number(data.amount || 0);
+        const type = data.type?.toLowerCase() || '';
         const createdAt = data.createdAt as Timestamp;
 
-        // Se a transação for um dos tipos de ganho
-        if (earningTypes.includes(type) && amount > 0) {
-          // Soma ao Total Geral (Desde o primeiro dia)
+        // LÓGICA: Se o valor for positivo e não for um depósito, é um ganho (roleta, comissão, checkin, etc)
+        if (amount > 0 && !excludeTypes.includes(type)) {
+          // Soma ao Total Geral (Desde sempre)
           grandTotal += amount;
 
-          // Se for de hoje, soma ao Total de Hoje
+          // Soma ao Ganho de Hoje se a data for de hoje
           if (createdAt && createdAt.seconds >= startOfTodaySeconds) {
             todayTotal += amount;
           }
@@ -108,7 +99,7 @@ export default function HomePage() {
       setStats({
         todayEarnings: todayTotal,
         totalInvites: teamSnap.size,
-        allTimeEarnings: grandTotal, // Agora calculado somando cada transação do histórico
+        allTimeEarnings: grandTotal,
         currentBalance: Number(userData?.balance || 0)
       });
     } catch (err) {
@@ -186,8 +177,8 @@ export default function HomePage() {
       </Card>
 
       <Roulette onSpinComplete={() => {
-        // Delay para garantir que o Firestore processou a transação
-        setTimeout(() => fetchHomeStats(user.id), 1500);
+        // Aumentado para 2.5s para garantir que o Firebase indexou a transação da roleta
+        setTimeout(() => fetchHomeStats(user.id), 2500);
       }} />
     </div>
   );
