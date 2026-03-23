@@ -4,7 +4,7 @@
 // ========================================
 
 const admin = require('firebase-admin');
-const axios = require('axios'); // Certifique-se de que 'axios' está no seu package.json
+const axios = require('axios');
 
 // Inicialização segura do Firebase
 if (!admin.apps.length) {
@@ -69,12 +69,17 @@ exports.handler = async (event) => {
     const evopayToken = process.env.EVOPAY_TOKEN;
     if (!evopayToken) throw new Error("Token EVOPAY_TOKEN não configurado.");
 
-    // Usa netAmount se houver taxa calculada, senão usa amount normal
-    const valorSaque = parseFloat(withdrawalData.netAmount || withdrawalData.amount);
+    // ==========================================
+    // CÁLCULO OBRIGATÓRIO DE TAXA DE 10% (SERVIDOR)
+    // ==========================================
+    const valorBruto = parseFloat(withdrawalData.amount); // Valor que o usuário pediu
+    const taxaDesconto = 0.10; // 10%
+    const valorFee = valorBruto * taxaDesconto; // Valor da taxa (Lucro da plataforma)
+    const valorLiquido = valorBruto - valorFee; // Valor real que vai pra chave PIX do usuário
 
-    // 3. Acionar a EvoPay para realizar o PIX
+    // 3. Acionar a EvoPay para realizar o PIX enviando apenas o valor líquido
     const evopayResponse = await axios.post('https://pix.evopay.cash/v1/withdraw', {
-      amount: valorSaque,
+      amount: valorLiquido, 
       destinationKey: withdrawalData.pixKey,
       description: `Saque Admin Monety`
     }, {
@@ -83,18 +88,22 @@ exports.handler = async (event) => {
 
     const gatewayId = evopayResponse.data?.id || evopayResponse.data?.transactionId || 'N/A';
 
-    // 4. Se o PIX deu certo, atualiza no Firestore
+    // 4. Se o PIX deu certo, atualiza a solicitação no Firestore
     await withdrawalRef.update({
       status: 'completed',
       gatewayTransactionId: gatewayId,
+      netAmount: valorLiquido, // Salva o quanto foi enviado de verdade
+      fee: valorFee,           // Salva a taxa cobrada
       approvedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Atualiza histórico do usuário
+    // Atualiza histórico do usuário com os valores detalhados
     const transactionRef = db.collection('users').doc(userId).collection('transactions').doc();
     await transactionRef.set({
       type: 'withdrawal',
-      amount: valorSaque,
+      amount: valorBruto,       // Mostra o total descontado do saldo
+      netAmount: valorLiquido,  // Mostra o que caiu na conta do banco
+      fee: valorFee,            // Mostra a taxa retida
       status: 'completed',
       description: `Saque PIX Aprovado (${withdrawalData.pixType})`,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
@@ -103,7 +112,12 @@ exports.handler = async (event) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ success: true, message: 'PIX enviado com sucesso!', transactionId: gatewayId })
+      body: JSON.stringify({ 
+        success: true, 
+        message: 'PIX enviado com sucesso!', 
+        transactionId: gatewayId,
+        valorEnviado: valorLiquido 
+      })
     };
 
   } catch (error) {
