@@ -63,17 +63,17 @@ exports.handler = async (event) => {
     // 4. Chamada para EvoPay
     const evopayToken = process.env.EVOPAY_TOKEN;
     
-    // Verifique se os campos pixKey e pixType existem no seu documento
     const payloadEvoPay = {
       amount: valorLiquido,
-      pixKey: withdrawalData.pixKey, // Corrigido para camelCase
-      pixType: withdrawalData.pixType || 'cpf', // Corrigido para camelCase
+      pixKey: withdrawalData.pixKey,
+      pixType: withdrawalData.pixType || 'cpf',
       description: `Saque Monety - ID ${withdrawId}`
     };
 
     console.log('Enviando para EvoPay:', payloadEvoPay);
 
-    const evopayResponse = await axios.post('https://pix.evopay.cash/v1/withdraw', payloadEvoPay, {
+    // CORREÇÃO AQUI: Mudança de pix.evopay.cash para api.evopay.cash
+    const evopayResponse = await axios.post('https://api.evopay.cash/v1/withdraw', payloadEvoPay, {
       headers: { 
         'API-Key': evopayToken,
         'Content-Type': 'application/json'
