@@ -457,7 +457,8 @@
           <thead>
             <tr>
               <th>Usuário</th>
-              <th>Valor</th>
+              <th>Valor Solicitado</th>
+              <th>Líquido (-10%)</th>
               <th>Chave PIX</th>
               <th>Status</th>
               <th>Data</th>
@@ -466,7 +467,7 @@
           </thead>
           <tbody id="withdrawalsTableBody">
             <tr>
-              <td colspan="6" style="text-align: center; padding: 40px;">
+              <td colspan="7" style="text-align: center; padding: 40px;">
                 <div class="loading-spinner"></div>
               </td>
             </tr>
@@ -667,7 +668,7 @@
       const tbody = document.getElementById('withdrawalsTableBody');
       
       if (withdrawals.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><div class="empty-state-icon">💰</div><div>Nenhum saque encontrado</div></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="empty-state-icon">💰</div><div>Nenhum saque encontrado</div></td></tr>';
         return;
       }
 
@@ -676,10 +677,14 @@
         const statusBadge = w.status === 'completed' ? 'badge-success' : 
                            w.status === 'processing' ? 'badge-warning' : 'badge-danger';
         
+        const amount = Number(w.amount) || 0;
+        const netAmount = amount * 0.90; // Desconto de 10% aplicado aqui
+        
         return `
           <tr>
             <td>${w.userEmail}</td>
-            <td>R$ ${Number(w.amount).toFixed(2)}</td>
+            <td>R$ ${amount.toFixed(2)}</td>
+            <td style="color: #22c55e; font-weight: bold;">R$ ${netAmount.toFixed(2)}</td>
             <td>${w.pixType}: ${w.pixKey}</td>
             <td><span class="badge ${statusBadge}">${w.status}</span></td>
             <td>${date.toLocaleDateString('pt-BR')}</td>
