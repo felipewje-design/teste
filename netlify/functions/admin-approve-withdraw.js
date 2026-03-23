@@ -1,26 +1,18 @@
-// ========================================
-// NETLIFY FUNCTION: Aprovar Saque Admin (EvoPay)
-// Caminho: netlify/functions/admin-approve-withdraw.js
-// ========================================
-
 const admin = require('firebase-admin');
 const axios = require('axios');
 
-// Inicialização segura do Firebase
+// Inicialização do Firebase Admin
 if (!admin.apps.length) {
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-  if (privateKey) {
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: privateKey.replace(/\\n/g, '\n')
-      })
-    });
-  }
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined
+    })
+  });
 }
 
-const db = admin.apps.length ? admin.firestore() : null;
+const db = admin.firestore();
 
 exports.handler = async (event) => {
   const headers = {
@@ -30,102 +22,113 @@ exports.handler = async (event) => {
     'Content-Type': 'application/json'
   };
 
-  // Preflight request
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
-  if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Método não permitido' }) };
 
   try {
-    // 1. Verificação de Segurança (Apenas Admin pode rodar isso)
+    // 1. Verificação de Token Admin (Segurança da Função)
     const authHeader = event.headers.authorization || event.headers.Authorization;
     const expectedToken = process.env.ADMIN_SECRET_TOKEN;
 
     if (!authHeader || authHeader !== `Bearer ${expectedToken}`) {
-      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Não autorizado. Token de Admin inválido.' }) };
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Não autorizado.' }) };
     }
 
     const { userId, withdrawId } = JSON.parse(event.body);
 
     if (!userId || !withdrawId) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Faltam parâmetros de identificação' }) };
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'ID de usuário ou saque ausente.' }) };
     }
 
-    if (!db) throw new Error("Conexão com Banco de Dados falhou.");
-
-    // 2. Buscar dados do saque no banco
+    // 2. Busca o saque no Firestore
     const withdrawalRef = db.collection('users').doc(userId).collection('withdrawals').doc(withdrawId);
     const withdrawalDoc = await withdrawalRef.get();
 
     if (!withdrawalDoc.exists) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Solicitação de saque não encontrada' }) };
+      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Saque não encontrado.' }) };
     }
 
     const withdrawalData = withdrawalDoc.data();
 
-    // Impede de pagar um saque duas vezes
+    // Validação de status
     if (withdrawalData.status !== 'processing' && withdrawalData.status !== 'pending') {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: `Este saque já foi processado. Status atual: ${withdrawalData.status}` }) };
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Este saque já foi processado anteriormente.' }) };
     }
 
+    // 3. Cálculos de Taxas (10% de desconto)
+    const valorBruto = parseFloat(withdrawalData.amount);
+    const taxaPlataforma = 0.10; // 10%
+    const valorTaxa = Number((valorBruto * taxaPlataforma).toFixed(2));
+    const valorLiquido = Number((valorBruto - valorTaxa).toFixed(2));
+
+    // 4. Chamada para EvoPay
     const evopayToken = process.env.EVOPAY_TOKEN;
-    if (!evopayToken) throw new Error("Token EVOPAY_TOKEN não configurado.");
+    
+    // Verifique se os campos pixKey e pixType existem no seu documento
+    const payloadEvoPay = {
+      amount: valorLiquido,
+      pix_key: withdrawalData.pixKey,
+      pix_type: withdrawalData.pixType || 'cpf', // Garante um tipo caso esteja vazio
+      description: `Saque Monety - ID ${withdrawId}`
+    };
 
-    // ==========================================
-    // CÁLCULO OBRIGATÓRIO DE TAXA DE 10% (SERVIDOR)
-    // ==========================================
-    const valorBruto = parseFloat(withdrawalData.amount); // Valor que o usuário pediu
-    const taxaDesconto = 0.10; // 10%
-    const valorFee = valorBruto * taxaDesconto; // Valor da taxa (Lucro da plataforma)
-    const valorLiquido = valorBruto - valorFee; // Valor real que vai pra chave PIX do usuário
-
-    // 3. Acionar a EvoPay para realizar o PIX enviando apenas o valor líquido
-    const evopayResponse = await axios.post('https://pix.evopay.cash/v1/withdraw', {
-      amount: valorLiquido, 
-      destinationKey: withdrawalData.pixKey,
-      description: `Saque Admin Monety`
-    }, {
-      headers: { 'API-Key': evopayToken, 'Content-Type': 'application/json' }
+    const evopayResponse = await axios.post('https://pix.evopay.cash/v1/withdraw', payloadEvoPay, {
+      headers: { 
+        'API-Key': evopayToken,
+        'Content-Type': 'application/json'
+      }
     });
 
     const gatewayId = evopayResponse.data?.id || evopayResponse.data?.transactionId || 'N/A';
 
-    // 4. Se o PIX deu certo, atualiza a solicitação no Firestore
-    await withdrawalRef.update({
+    // 5. Atualização no Firestore (Sucesso)
+    const batch = db.batch();
+
+    // Atualiza o documento do saque
+    batch.update(withdrawalRef, {
       status: 'completed',
       gatewayTransactionId: gatewayId,
-      netAmount: valorLiquido, // Salva o quanto foi enviado de verdade
-      fee: valorFee,           // Salva a taxa cobrada
+      netAmount: valorLiquido,
+      fee: valorTaxa,
       approvedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Atualiza histórico do usuário com os valores detalhados
+    // Cria o registro no histórico de transações
     const transactionRef = db.collection('users').doc(userId).collection('transactions').doc();
-    await transactionRef.set({
+    batch.set(transactionRef, {
       type: 'withdrawal',
-      amount: valorBruto,       // Mostra o total descontado do saldo
-      netAmount: valorLiquido,  // Mostra o que caiu na conta do banco
-      fee: valorFee,            // Mostra a taxa retida
+      amount: valorBruto,
+      netAmount: valorLiquido,
+      fee: valorTaxa,
       status: 'completed',
-      description: `Saque PIX Aprovado (${withdrawalData.pixType})`,
+      description: `Saque PIX Aprovado (-10% taxa)`,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
+
+    await batch.commit();
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({ 
         success: true, 
-        message: 'PIX enviado com sucesso!', 
-        transactionId: gatewayId,
-        valorEnviado: valorLiquido 
+        message: 'Saque aprovado e enviado!', 
+        enviado: valorLiquido 
       })
     };
 
   } catch (error) {
-    console.error('Erro ao aprovar saque:', error.response?.data || error.message);
+    console.error('ERRO CRÍTICO NA FUNÇÃO:');
+    const errorMsg = error.response?.data?.message || error.message;
+    console.error(errorMsg);
+
     return {
       statusCode: error.response?.status || 500,
       headers,
-      body: JSON.stringify({ success: false, error: error.response?.data?.message || error.message })
+      body: JSON.stringify({ 
+        success: false, 
+        error: errorMsg,
+        details: error.response?.data || null
+      })
     };
   }
 };
